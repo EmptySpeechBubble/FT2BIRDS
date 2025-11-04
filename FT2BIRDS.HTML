@@ -20467,14 +20467,6 @@ function spawnOwls() {
                 puddles = puddles.slice(-8);
                 debugLog(`Reduced puddles to 8`);
             }
-
-            // Disable mushroom mode if enabled (major performance impact)
-            if (mushroomMode && currentFPS < 5) {
-                mushroomMode = false;
-                birdTrails = [];
-                debugLog("Auto-disabled mushroom mode due to critical FPS");
-                console.warn("Mushroom mode was automatically disabled to improve performance. FPS was critically low.");
-            }
         }
     }
 
