@@ -1385,12 +1385,12 @@ function checkOwlWindChimeDelivery() {
                     windChimeOwlDelivered = true;
                     windChimeEnabled = true; // Auto-enable
 
-                    // FIX: Initialize audio and start playing wind chimes
-                    if (!audioContext) {
-                        initializeAudio();
-                    }
+                    // FIXED: Only start wind chimes if audio is already initialized (requires user gesture)
+                    // If audio isn't ready yet, playWindChimes will retry when user interacts
                     lastWindChimeTime = 0; // Reset to trigger immediate chime
-                    playWindChimes(); // Start the wind chime playback loop
+                    if (!windChimeTimeout) {
+                        playWindChimes(); // Start the wind chime playback loop
+                    }
 
                     this.isDeliveringChimes = false;
 
@@ -1982,13 +1982,14 @@ let rainsCompleted = 0; // Track number of completed rain events (for pond forma
         const LIGHTNING_CHANCE = 0.3; // 30% chance of lightning during rain
         const LIGHTNING_TREE_DAMAGE = 70; // Damage to tree from lightning
         const SPECIAL_TWIG_CHANCE = 0.7; // 70% chance of a twig being special after lightning
-        const RAIN_PROBABILITY = 0.95; // 95% accuracy for weather forecast 
+        const RAIN_PROBABILITY = 0.95; // 95% accuracy for weather forecast
         const MAX_BIRDS = 50;
         const MAX_FOOD = 50; // REDUCED from 70 - encourage consumption
         const MAX_SPEED = 5; // Maximum speed for moving entities
         const MIN_STATE_DURATION = 3000; // Minimum 3 seconds to prevent rapid toggling (BIRD_STATE_DURATION handles visibility)
         const MAX_BIRD_POOPS = 10;
         const MAX_PUDDLES = 13; // Limit puddles for performance
+        const MAX_MUSHROOM_CLUSTERS = 20; // ADDED: Limit mushroom clusters to prevent performance issues
         const MAX_WORMS = 50; // INCREASED to allow exceeding crow threshold of 30
         const MAX_TWIGS = 15; // REDUCED from 20 - encourage consumption
         const MAX_NEST_FIND_ATTEMPTS = 20; 
@@ -2426,6 +2427,13 @@ function createFlower(x, y) {
 
         // Regular Mushroom Cluster System
         function spawnMushroomCluster(treeX, treeY) {
+            // PERFORMANCE FIX: Don't spawn if we're at the limit
+            if (mushroomClusters.length >= MAX_MUSHROOM_CLUSTERS) {
+                // Remove oldest cluster to make room for new one
+                mushroomClusters.sort((a, b) => b.age - a.age);
+                mushroomClusters.pop();
+            }
+
             // Create a small cluster of 3-5 mushrooms near tree base
             const numMushrooms = 3 + Math.floor(Math.random() * 3);
             const cluster = {
@@ -2455,6 +2463,13 @@ function createFlower(x, y) {
                 cluster.age += deltaTime;
                 return cluster.age < cluster.maxAge;
             });
+
+            // PERFORMANCE FIX: Enforce maximum limit
+            if (mushroomClusters.length > MAX_MUSHROOM_CLUSTERS) {
+                // Sort by age (oldest first) and remove excess
+                mushroomClusters.sort((a, b) => b.age - a.age);
+                mushroomClusters = mushroomClusters.slice(0, MAX_MUSHROOM_CLUSTERS);
+            }
         }
 
         function drawMushroomClusters() {
@@ -18407,6 +18422,7 @@ function spawnOwls() {
 
         // V26: Improved wind chime system with more balanced volume and timing
         // ENHANCED: Better error handling and recovery
+        // FIXED: Only initialize after user gesture to comply with browser policies
         function initializeAudio() {
             try {
                 // Check if audio context already exists and is usable
@@ -18415,16 +18431,32 @@ function spawnOwls() {
                     return true;
                 }
 
-                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                // Initialize wind chime sounds first (these can be defined without AudioContext)
+                if (!windChimeSounds || Object.keys(windChimeSounds).length === 0) {
+                    // Define wind chime frequencies based on pentatonic scale - OCTAVE HIGHER for brighter sound
+                    // Added F and B to support all melodies and rainbow sounds
+                    windChimeSounds = {
+                        'C': 523.25,  // C5 (was C4 261.63)
+                        'D': 587.33,  // D5 (was D4 293.66)
+                        'E': 659.25,  // E5 (was E4 329.63)
+                        'F': 698.46,  // F5 - ADDED to fix wind chime errors
+                        'G': 783.99,  // G5 (was G4 392.00)
+                        'A': 880.00,  // A5 (was A4 440.00)
+                        'B': 987.77,  // B5 - ADDED for rainbow sounds
+                        // Also support lower octave for rainbow (C4-C5 scale)
+                        'C4': 261.63,
+                        'D4': 293.66,
+                        'E4': 329.63,
+                        'F4': 349.23,
+                        'G4': 392.00,
+                        'A4': 440.00,
+                        'B4': 493.88,
+                        'C5': 523.25
+                    };
+                }
 
-                // Define wind chime frequencies based on pentatonic scale - OCTAVE HIGHER for brighter sound
-                windChimeSounds = {
-                    'C': 523.25, // C5 (was C4 261.63)
-                    'D': 587.33, // D5 (was D4 293.66)
-                    'E': 659.25, // E5 (was E4 329.63)
-                    'G': 783.99, // G5 (was G4 392.00)
-                    'A': 880.00  // A5 (was A4 440.00)
-                };
+                // Create AudioContext (requires user gesture in modern browsers)
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
 
                 // Resume audio context if suspended (browser autoplay policy)
                 if (audioContext.state === 'suspended') {
@@ -18440,7 +18472,8 @@ function spawnOwls() {
                 return true;
             } catch (e) {
                 console.error("Error initializing audio:", e);
-                windChimeEnabled = false;
+                // Don't disable wind chimes entirely, just note that audio isn't ready yet
+                // It will be initialized on user interaction
                 audioContext = null;
                 return false;
             }
@@ -19227,10 +19260,16 @@ function spawnOwls() {
         return;
     }
 
-    if (audioContext && audioContext.state === 'suspended') audioContext.resume();
-
-    // Initialize audio context if needed
-    if (!audioContext) initializeAudio();
+    // FIXED: Don't initialize audio automatically - wait for user gesture
+    // If audio context doesn't exist yet, just skip playing audio and try again later
+    if (!audioContext) {
+        // Schedule next check - audio will start when user interacts
+        if (windChimeTimeout) clearTimeout(windChimeTimeout);
+        windChimeTimeout = setTimeout(() => {
+            playWindChimes();
+        }, 5000); // Check again in 5 seconds
+        return;
+    }
 
     // IMPORTANT FIX: Check if audio context is suspended and resume it
     if (audioContext && audioContext.state === 'suspended') {
@@ -20411,6 +20450,32 @@ function spawnOwls() {
             }
             debugLog("Auto-reduced trail points due to low FPS");
         }
+
+        // PERFORMANCE FIX: Aggressive cleanup if FPS drops below 10
+        if (currentFPS < 10) {
+            debugLog(`Critical FPS (${currentFPS}) - performing aggressive cleanup`);
+
+            // Limit mushroom clusters more aggressively
+            if (mushroomClusters.length > 10) {
+                mushroomClusters.sort((a, b) => b.age - a.age);
+                mushroomClusters = mushroomClusters.slice(0, 10);
+                debugLog(`Reduced mushroom clusters to 10`);
+            }
+
+            // Clear old puddles
+            if (puddles.length > 8) {
+                puddles = puddles.slice(-8);
+                debugLog(`Reduced puddles to 8`);
+            }
+
+            // Disable mushroom mode if enabled (major performance impact)
+            if (mushroomMode && currentFPS < 5) {
+                mushroomMode = false;
+                birdTrails = [];
+                debugLog("Auto-disabled mushroom mode due to critical FPS");
+                console.warn("Mushroom mode was automatically disabled to improve performance. FPS was critically low.");
+            }
+        }
     }
 
     // Update simulation time
@@ -21581,15 +21646,13 @@ function drawFullScene() {
                 windChime.treeId = randomTree.id;
                 windChimes.push(windChime);
 
-                // Auto-enable wind chime audio if spawned
+                // Auto-enable wind chime audio if spawned (audio will start on first user interaction)
                 windChimeEnabled = true;
 
-                // FIX: Initialize audio and start playing wind chimes
-                if (!audioContext) {
-                    initializeAudio();
-                }
-                lastWindChimeTime = 0; // Reset to trigger immediate chime
-                playWindChimes(); // Start the wind chime playback loop
+                // FIXED: Don't initialize audio or start playback on page load
+                // Wind chimes will start automatically when user first clicks/taps
+                // This prevents AudioContext errors before user interaction
+                lastWindChimeTime = 0; // Reset to trigger chime when audio is ready
 
                 debugLog(`Initial wind chime spawned on tree at (${randomTree.x})`);
                 addDiaryEntry("Gentle wind chimes hang from a tree, waiting to sing in the breeze.", 'discovery');
@@ -22574,10 +22637,16 @@ const clickTimeout = 500; // ms between clicks to count as multi-click
 canvas.addEventListener('click', (e) => {
     // Initialize audio on first click (required by browsers)
     if (!audioContext) {
-        initializeAudio();
+        const audioInitialized = initializeAudio();
+        // Start wind chimes if they're enabled and audio initialized successfully
+        if (audioInitialized && windChimeEnabled && !windChimeTimeout) {
+            playWindChimes();
+        }
     }
     if (audioContext && audioContext.state === 'suspended') {
-        audioContext.resume();
+        audioContext.resume().catch(err => {
+            console.error("Failed to resume audio:", err);
+        });
     }
 
     // Prevent any default behaviors and stop propagation
@@ -22996,10 +23065,16 @@ canvas.addEventListener('touchstart', (e) => {
     if (e.touches.length > 0) {
         // Initialize audio on first touch (required by browsers)
         if (!audioContext) {
-            initializeAudio();
+            const audioInitialized = initializeAudio();
+            // Start wind chimes if they're enabled and audio initialized successfully
+            if (audioInitialized && windChimeEnabled && !windChimeTimeout) {
+                playWindChimes();
+            }
         }
         if (audioContext && audioContext.state === 'suspended') {
-            audioContext.resume();
+            audioContext.resume().catch(err => {
+                console.error("Failed to resume audio:", err);
+            });
         }
 
         const rect = canvas.getBoundingClientRect();
